@@ -14,9 +14,9 @@ def draw_text_top_left(draw, x, y, text, font, fill="white"):
 
 def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: str, subtitle_text: str = None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    background_path = os.path.join(script_dir, "red_background.png")
-    fira_font_path = os.path.join(script_dir, "FiraSansExtraCondensed-Regular.ttf")
-    emoji_font_path = os.path.join(script_dir, "EmojiOneColor.otf")
+    background_path = os.path.join(script_dir, "img/red_background.png")
+    fira_font_path = os.path.join(script_dir, "fonts/FiraSansExtraCondensed-Regular.ttf")
+    emoji_font_path = os.path.join(script_dir, "fonts/EmojiOneColor.otf")
 
     background = Image.open(background_path).convert("RGB")
     bg_w, bg_h = background.size
@@ -91,6 +91,6 @@ if __name__ == "__main__":
         duration_text="15 часов",
         subtitle_text="Основы баз данных"
     )
-    with open("output_cover.png", "wb") as f:
+    with open("img/output_cover.png", "wb") as f:
         f.write(cover.getvalue())
-    print("Обложка сохранена: output_cover.png")
+    print("Обложка сохранена: img/output_cover.png")
