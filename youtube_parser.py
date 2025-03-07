@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from googleapiclient.discovery import build
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
+import logging
 
-# Загрузка переменных окружения
 load_dotenv()
 
 def extract_playlist_id(url):
@@ -32,76 +32,86 @@ def get_max_thumbnail(thumbnails):
 
 def get_playlist_info(playlist_url):
     """Получение данных плейлиста с дополнительной информацией об обложке"""
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    if not api_key:
-        raise ValueError("API ключ не найден в .env файле")
+    try:
+        api_key = os.getenv("YOUTUBE_API_KEY")
+        if not api_key:
+            raise ValueError("API ключ не найден в .env файле")
     
-    playlist_id = extract_playlist_id(playlist_url)
-    if not playlist_id:
-        raise ValueError("Некорректная ссылка на плейлист")
+        playlist_id = extract_playlist_id(playlist_url)
+        if not playlist_id:
+            raise ValueError("Некорректная ссылка на плейлист")
     
-    youtube = build('youtube', 'v3', developerKey=api_key)
+        youtube = build('youtube', 'v3', developerKey=api_key)
     
-    # Получение метаданных плейлиста
-    playlist = youtube.playlists().list(
-        part='snippet',
-        id=playlist_id
-    ).execute()['items'][0]['snippet']
-    
-    videos = []
-    next_page_token = None
-    total_seconds = 0
-    latest_date = datetime.min.replace(tzinfo=timezone.utc)
-    cover_url = None  # Обложка берётся из первого видео
-    
-    while True:
-        items = youtube.playlistItems().list(
+        playlist_response = youtube.playlists().list(
             part='snippet',
-            playlistId=playlist_id,
-            maxResults=50,
-            pageToken=next_page_token
+            id=playlist_id
         ).execute()
-        
-        video_ids = [i['snippet']['resourceId']['videoId'] for i in items['items']]
-        
-        # Получение деталей видео
-        details = youtube.videos().list(
-            part='contentDetails,snippet',
-            id=','.join(video_ids)
-        ).execute()
-        
-        for item, detail in zip(items['items'], details['items']):
-            published = datetime.fromisoformat(
-                item['snippet']['publishedAt'].replace('Z', '+00:00')
-            )
-            duration_sec = parse_duration(detail['contentDetails']['duration'])
-            
-            videos.append({
-                'title': item['snippet']['title'],
-                'published': published,
-                'duration': duration_sec
-            })
-            
-            total_seconds += duration_sec
-            if published > latest_date:
-                latest_date = published
-            
-            # Если обложка еще не установлена, берём её из первого видео
-            if cover_url is None:
-                cover_url = get_max_thumbnail(detail['snippet']['thumbnails'])
-        
-        next_page_token = items.get('nextPageToken')
-        if not next_page_token:
-            break
+        if not playlist_response['items']:
+            raise ValueError("Плейлист не найден")
+        playlist = playlist_response['items'][0]['snippet']
     
-    course_year = latest_date.year if latest_date != datetime.min.replace(tzinfo=timezone.utc) else None
-    total_hours = math.ceil(total_seconds / 3600)
+        videos = []
+        next_page_token = None
+        total_seconds = 0
+        latest_date = datetime.min.replace(tzinfo=timezone.utc)
+        cover_url = None  # Обложка берётся из первого видео
     
-    return {
-        'title': playlist['title'],
-        'description': playlist.get('description', ''),
-        'course_year': course_year,
-        'total_hours': total_hours,
-        'cover_url': cover_url,
-        'videos': videos
-    }
+        while True:
+            items = youtube.playlistItems().list(
+                part='snippet',
+                playlistId=playlist_id,
+                maxResults=50,
+                pageToken=next_page_token
+            ).execute()
+        
+            video_ids = [i['snippet']['resourceId']['videoId'] for i in items['items']]
+        
+            details = youtube.videos().list(
+                part='contentDetails,snippet',
+                id=','.join(video_ids)
+            ).execute()
+        
+            for item, detail in zip(items['items'], details['items']):
+                published = datetime.fromisoformat(
+                    item['snippet']['publishedAt'].replace('Z', '+00:00')
+                )
+                duration_sec = parse_duration(detail['contentDetails']['duration'])
+            
+                videos.append({
+                    'title': item['snippet']['title'],
+                    'published': published,
+                    'duration': duration_sec
+                })
+            
+                total_seconds += duration_sec
+                if published > latest_date:
+                    latest_date = published
+            
+                if cover_url is None:
+                    cover_url = get_max_thumbnail(detail['snippet']['thumbnails'])
+        
+            next_page_token = items.get('nextPageToken')
+            if not next_page_token:
+                break
+    
+        course_year = latest_date.year if latest_date != datetime.min.replace(tzinfo=timezone.utc) else None
+        if course_year is None:
+            logging.warning("Не удалось определить год плейлиста, список видео пуст или данные некорректны")
+        total_hours = math.ceil(total_seconds / 3600)
+    
+        if not cover_url:
+            logging.warning("Обложка для плейлиста не найдена")
+            cover_url = "https://via.placeholder.com/1200x900.png?text=Обложка+не+найдена"
+    
+        return {
+            'title': playlist['title'],
+            'description': playlist.get('description', ''),
+            'course_year': course_year,
+            'total_hours': total_hours,
+            'cover_url': cover_url,
+            'videos': videos
+        }
+    except Exception as e:
+        logging.error(f"Ошибка при получении данных плейлиста: {e}")
+        return None

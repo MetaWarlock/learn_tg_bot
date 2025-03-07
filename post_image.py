@@ -2,6 +2,7 @@ import os
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
+import logging
 
 def draw_text_top_left(draw, x, y, text, font, fill="white"):
     left0, top0, right0, bottom0 = draw.textbbox((0, 0), text, font=font)
@@ -15,15 +16,23 @@ def draw_text_top_left(draw, x, y, text, font, fill="white"):
 def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: str, subtitle_text: str = None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     background_path = os.path.join(script_dir, "img/red_background.png")
+    if not os.path.exists(background_path):
+        raise FileNotFoundError(f"Фоновая картинка не найдена: {background_path}")
     fira_font_path = os.path.join(script_dir, "fonts/FiraSansExtraCondensed-Regular.ttf")
     emoji_font_path = os.path.join(script_dir, "fonts/EmojiOneColor.otf")
 
     background = Image.open(background_path).convert("RGB")
     bg_w, bg_h = background.size
 
-    response = requests.get(poster_url)
-    response.raise_for_status()
-    poster = Image.open(BytesIO(response.content)).convert("RGBA")
+    if not poster_url:
+        raise ValueError("URL обложки не указан")
+    try:
+        response = requests.get(poster_url, timeout=10)
+        response.raise_for_status()
+        poster = Image.open(BytesIO(response.content)).convert("RGBA")
+    except Exception as e:
+        logging.error(f"Ошибка загрузки обложки: {e}")
+        poster = Image.new("RGBA", (1200, 900), (255, 0, 0, 255))
 
     new_poster_height = 330
     w_orig, h_orig = poster.size
@@ -40,17 +49,17 @@ def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: 
     font_text = ImageFont.truetype(fira_font_path, 48)
     font_emoji = ImageFont.truetype(emoji_font_path, 48)
 
-    # Draw title
+    # Рисуем заголовок
     title_x, title_y = 60, 60
     title_bbox = draw_text_top_left(draw, title_x, title_y, title_text, font_title, fill="white")
     
-    # Draw subtitle if provided
+    # Рисуем подзаголовок, если он есть
     if subtitle_text:
         subtitle_x = title_x
         subtitle_y = title_bbox[3] + 10
         draw_text_top_left(draw, subtitle_x, subtitle_y, subtitle_text, font_subtitle, fill="white")
 
-    # Draw year
+    # Рисуем год (с иконкой)
     line_1_x = 60
     line_1_y = poster_y
     left_icon, top_icon, right_icon, bottom_icon = draw.textbbox((0, 0), "📅", font=font_emoji)
@@ -60,11 +69,11 @@ def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: 
     max_line1_h = max(icon_h, year_h)
     y_icon = line_1_y + (max_line1_h - icon_h) // 2
     y_year = line_1_y + (max_line1_h - year_h) // 2
-    draw_text_top_left(draw, line_1_x, y_icon, "📅", font_emoji)
+    draw_text_top_left(draw, line_1_x, y_icon, "📅", font=font_emoji)
     x_year = line_1_x + icon_w + 10
-    draw_text_top_left(draw, x_year, y_year, year_text, font_text)
+    draw_text_top_left(draw, x_year, y_year, year_text, font=font_text)
 
-    # Draw duration
+    # Рисуем продолжительность (с иконкой)
     line_2_x = 60
     line_2_y = line_1_y + max_line1_h + 10
     left_clock, top_clock, right_clock, bottom_clock = draw.textbbox((0, 0), "⏰", font=font_emoji)
@@ -74,9 +83,9 @@ def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: 
     max_line2_h = max(clock_h, dur_h)
     y_clock = line_2_y + (max_line2_h - clock_h) // 2
     y_dur = line_2_y + (max_line2_h - dur_h) // 2
-    draw_text_top_left(draw, line_2_x, y_clock, "⏰", font_emoji)
+    draw_text_top_left(draw, line_2_x, y_clock, "⏰", font=font_emoji)
     x_dur = line_2_x + clock_w + 10
-    draw_text_top_left(draw, x_dur, y_dur, duration_text, font_text)
+    draw_text_top_left(draw, x_dur, y_dur, duration_text, font=font_text)
 
     output = BytesIO()
     background.save(output, format='PNG')

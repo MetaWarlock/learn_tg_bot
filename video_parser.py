@@ -5,18 +5,16 @@ from datetime import datetime, timezone
 from googleapiclient.discovery import build
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
+import logging
 
-# Загрузка переменных окружения
 load_dotenv()
 
 def extract_video_id(url):
     """Извлекаем ID видео из разных форматов URL"""
     parsed = urlparse(url)
     if 'youtu.be' in parsed.netloc:
-        # Короткий формат: youtu.be/ID
         return parsed.path.lstrip('/')
     elif 'youtube.com' in parsed.netloc:
-        # Формат: youtube.com/watch?v=ID
         query = parsed.query
         params = parse_qs(query)
         return params.get('v', [None])[0]
@@ -39,38 +37,42 @@ def get_max_thumbnail(thumbnails):
 
 def get_video_info(video_url):
     """Получение информации об отдельном видео"""
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    if not api_key:
-        raise ValueError("API ключ не найден в .env файле")
+    try:
+        api_key = os.getenv("YOUTUBE_API_KEY")
+        if not api_key:
+            raise ValueError("API ключ не найден в .env файле")
     
-    video_id = extract_video_id(video_url)
-    if not video_id:
-        raise ValueError("Некорректная ссылка на видео")
+        video_id = extract_video_id(video_url)
+        if not video_id:
+            raise ValueError("Некорректная ссылка на видео")
     
-    youtube = build('youtube', 'v3', developerKey=api_key)
+        youtube = build('youtube', 'v3', developerKey=api_key)
     
-    response = youtube.videos().list(
-        part='contentDetails,snippet',
-        id=video_id
-    ).execute()
+        response = youtube.videos().list(
+            part='contentDetails,snippet',
+            id=video_id
+        ).execute()
     
-    if not response['items']:
-        raise ValueError("Видео не найдено")
+        if not response['items']:
+            raise ValueError("Видео не найдено")
     
-    detail = response['items'][0]
+        detail = response['items'][0]
     
-    published = datetime.fromisoformat(
-        detail['snippet']['publishedAt'].replace('Z', '+00:00')
-    )
+        published = datetime.fromisoformat(
+            detail['snippet']['publishedAt'].replace('Z', '+00:00')
+        )
     
-    duration_sec = parse_duration(detail['contentDetails']['duration'])
-    total_hours = math.ceil(duration_sec / 3600)
-    cover_url = get_max_thumbnail(detail['snippet']['thumbnails'])
+        duration_sec = parse_duration(detail['contentDetails']['duration'])
+        total_hours = math.ceil(duration_sec / 3600)
+        cover_url = get_max_thumbnail(detail['snippet']['thumbnails'])
     
-    return {
-        'title': detail['snippet']['title'],
-        'course_year': published.year,
-        'total_hours': total_hours,
-        'description': detail['snippet'].get('description', ''),
-        'cover_url': cover_url
-    }
+        return {
+            'title': detail['snippet']['title'],
+            'course_year': published.year,
+            'total_hours': total_hours,
+            'description': detail['snippet'].get('description', ''),
+            'cover_url': cover_url
+        }
+    except Exception as e:
+        logging.error(f"Ошибка при получении данных видео: {e}")
+        return None
