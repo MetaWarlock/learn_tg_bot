@@ -19,7 +19,12 @@ def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: 
     if not os.path.exists(background_path):
         raise FileNotFoundError(f"Фоновая картинка не найдена: {background_path}")
     fira_font_path = os.path.join(script_dir, "fonts/FiraSansExtraCondensed-Regular.ttf")
-    emoji_font_path = os.path.join(script_dir, "fonts/EmojiOneColor.otf")
+    calendar_path = os.path.join(script_dir, "img/calendar.png")
+    clock_path = os.path.join(script_dir, "img/clock.png")
+    if not os.path.exists(calendar_path):
+        raise FileNotFoundError(f"Изображение календаря не найдено: {calendar_path}")
+    if not os.path.exists(clock_path):
+        raise FileNotFoundError(f"Изображение часов не найдено: {clock_path}")
 
     background = Image.open(background_path).convert("RGB")
     bg_w, bg_h = background.size
@@ -44,48 +49,64 @@ def make_cover(poster_url: str, title_text: str, year_text: str, duration_text: 
     background.paste(poster, (poster_x, poster_y), poster)
 
     draw = ImageDraw.Draw(background)
-    font_title = ImageFont.truetype(fira_font_path, 60)
-    font_subtitle = ImageFont.truetype(fira_font_path, 30)
-    font_text = ImageFont.truetype(fira_font_path, 48)
-    font_emoji = ImageFont.truetype(emoji_font_path, 48)
+    try:
+        font_title = ImageFont.truetype(fira_font_path, 60)
+        font_subtitle = ImageFont.truetype(fira_font_path, 34)
+        font_text = ImageFont.truetype(fira_font_path, 48)
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке шрифтов: {e}")
+        raise
+
+    # Загружаем изображения для календаря и часов
+    calendar_img = Image.open(calendar_path).convert("RGBA").resize((48, 48), Image.LANCZOS)
+    clock_img = Image.open(clock_path).convert("RGBA").resize((48, 48), Image.LANCZOS)
 
     # Рисуем заголовок
     title_x, title_y = 60, 60
     title_bbox = draw_text_top_left(draw, title_x, title_y, title_text, font_title, fill="white")
     
-    # Рисуем подзаголовок, если он есть
+    # Рисуем подзаголовок, если он есть, с уменьшенным отступом (5 пикселей)
     if subtitle_text:
         subtitle_x = title_x
-        subtitle_y = title_bbox[3] + 10
+        subtitle_y = title_bbox[3] + 5  # Было 10, стало 5
         draw_text_top_left(draw, subtitle_x, subtitle_y, subtitle_text, font_subtitle, fill="white")
 
-    # Рисуем год (с иконкой)
-    line_1_x = 60
-    line_1_y = poster_y
-    left_icon, top_icon, right_icon, bottom_icon = draw.textbbox((0, 0), "📅", font=font_emoji)
-    icon_w, icon_h = right_icon - left_icon, bottom_icon - top_icon
-    left_year, top_year, right_year, bottom_year = draw.textbbox((0, 0), year_text, font=font_text)
-    year_w, year_h = right_year - left_year, bottom_year - top_year
-    max_line1_h = max(icon_h, year_h)
-    y_icon = line_1_y + (max_line1_h - icon_h) // 2
-    y_year = line_1_y + (max_line1_h - year_h) // 2
-    draw_text_top_left(draw, line_1_x, y_icon, "📅", font=font_emoji)
-    x_year = line_1_x + icon_w + 10
-    draw_text_top_left(draw, x_year, y_year, year_text, font=font_text)
+    # Вычисляем размеры текста для года и продолжительности
+    year_bbox = draw.textbbox((0, 0), year_text, font=font_text)
+    year_w, year_h = year_bbox[2] - year_bbox[0], year_bbox[3] - year_bbox[1]
+    duration_bbox = draw.textbbox((0, 0), duration_text, font=font_text)
+    duration_w, duration_h = duration_bbox[2] - duration_bbox[0], duration_bbox[3] - duration_bbox[1]
 
-    # Рисуем продолжительность (с иконкой)
-    line_2_x = 60
-    line_2_y = line_1_y + max_line1_h + 10
-    left_clock, top_clock, right_clock, bottom_clock = draw.textbbox((0, 0), "⏰", font=font_emoji)
-    clock_w, clock_h = right_clock - left_clock, bottom_clock - top_clock
-    left_dur, top_dur, right_dur, bottom_dur = draw.textbbox((0, 0), duration_text, font=font_text)
-    dur_w, dur_h = right_dur - left_dur, bottom_dur - top_dur
-    max_line2_h = max(clock_h, dur_h)
-    y_clock = line_2_y + (max_line2_h - clock_h) // 2
-    y_dur = line_2_y + (max_line2_h - dur_h) // 2
-    draw_text_top_left(draw, line_2_x, y_clock, "⏰", font=font_emoji)
-    x_dur = line_2_x + clock_w + 10
-    draw_text_top_left(draw, x_dur, y_dur, duration_text, font=font_text)
+    # Размеры изображений (48x48)
+    icon_w, icon_h = 48, 48
+
+    # Отступы
+    icon_text_gap = 10  # Отступ между иконкой и текстом
+    line_gap = 10       # Отступ между строками (год и продолжительность)
+
+    # Общая высота блока (иконка + текст)
+    line1_h = max(icon_h, year_h)
+    line2_h = max(icon_h, duration_h)
+    total_block_h = line1_h + line_gap + line2_h
+
+    # Центрируем блок по вертикали
+    block_y = (bg_h - total_block_h) // 2
+
+    # Рисуем год (иконка + текст)
+    line1_x = 60
+    y_icon1 = block_y + (line1_h - icon_h) // 2
+    background.paste(calendar_img, (line1_x, y_icon1), calendar_img)
+    x_year = line1_x + icon_w + icon_text_gap
+    y_year = block_y + (line1_h - year_h) // 2
+    draw_text_top_left(draw, x_year, y_year, year_text, font_text, fill="white")
+
+    # Рисуем продолжительность (иконка + текст)
+    line2_x = 60
+    y_icon2 = block_y + line1_h + line_gap + (line2_h - icon_h) // 2
+    background.paste(clock_img, (line2_x, y_icon2), clock_img)
+    x_duration = line2_x + icon_w + icon_text_gap
+    y_duration = block_y + line1_h + line_gap + (line2_h - duration_h) // 2
+    draw_text_top_left(draw, x_duration, y_duration, duration_text, font_text, fill="white")
 
     output = BytesIO()
     background.save(output, format='PNG')

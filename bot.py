@@ -1,16 +1,15 @@
 import os
-import re
 import logging
 import sys
 from telebot import TeleBot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 from video_parser import get_video_info, extract_video_id
 from youtube_parser import get_playlist_info, extract_playlist_id
-from post_image import make_cover
-from chatgpt import generate_post
+from post_generator import generate_post_text, extract_title_and_subtitle, generate_cover
 from io import BytesIO
 
-# Настройка логирования: вывод в консоль и запись в файл bot_errors.log
+# Настройка логирования
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -28,6 +27,9 @@ if not TG_TOKEN:
 
 bot = TeleBot(TG_TOKEN)
 
+# Словарь для хранения состояний пользователей
+user_states = {}
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     logging.info("Команда /start получена")
@@ -35,6 +37,11 @@ def send_welcome(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
+    chat_id = message.chat.id
+    if user_states.get(chat_id, {}).get('state') == 'waiting_for_title':
+        handle_new_title(message)
+        return
+
     url = message.text.strip()
     logging.debug(f"Получена ссылка: {url}")
 
@@ -45,7 +52,7 @@ def handle_message(message):
         year_text = "Неизвестно"
         duration_text = "Неизвестно"
 
-        # Определяем тип ссылки через функции извлечения ID
+        # Определяем тип ссылки
         playlist_id = extract_playlist_id(url)
         video_id = extract_video_id(url)
         
@@ -85,64 +92,17 @@ def handle_message(message):
             year_text = str(data['course_year'])
             duration_text = f"{data['total_hours']} часов"
         else:
-            logging.warning("Неизвестный формат ссылки, отправляем ошибку пользователю.")
-            bot.send_message(message.chat.id, "⛔ Некорректный формат ссылки")
+            logging.warning("Неизвестный формат ссылки.")
+            bot.send_message(chat_id, "⛔ Некорректный формат ссылки")
             return
 
-        # Проверка наличия ключевых данных
         if not all([data, poster_url, course_info]):
             raise ValueError("Одно из ключевых значений отсутствует")
 
-        # Генерация поста через ChatGPT
-        logging.debug("Вызываем generate_post...")
-        post_text = generate_post(course_info)
-        if not post_text:
-            raise ValueError("Не удалось получить пост от ChatGPT (post_text == None)")
-        
-        # Убираем лишние тройные кавычки, если они присутствуют
-        post_text = post_text.replace("```", "")
-
-        # Извлечение заголовка и подзаголовка
-        lines = post_text.split('\n')
-        title_text = None
-        subtitle_text = None
-
-        # Шаблон для поиска текста между <b>...</b>
-        title_pattern = re.compile(r'<b>(.*?)</b>', re.IGNORECASE)
-
-        for i, line in enumerate(lines):
-            match = title_pattern.search(line)
-            if match:
-                # В group(1) будет содержаться всё, что между <b> и </b>
-                title_text = match.group(1).strip()
-                # Попробуем взять подзаголовок из следующей строки, если она есть
-                if i + 1 < len(lines):
-                    next_line = lines[i+1].strip()
-                    # Проверяем, что строка не начинается с эмодзи или тегов
-                    if next_line and not next_line.startswith(('🗓', '⏰', '🔹', '♦️', '<a')):
-                        subtitle_text = next_line
-                break
-
-        logging.debug(f"Итоговые title_text='{title_text}' subtitle_text='{subtitle_text}'")
-
-        # Если заголовок длиннее 30 символов, обрезаем его и формируем подзаголовок
-        if title_text and len(title_text) > 30:
-            words = title_text.split()
-            title_text = " ".join(words[:3])
-            subtitle_text = " ".join(words[3:]) if not subtitle_text else subtitle_text
-            logging.debug(f"Заголовок обрезан: title_text='{title_text}', subtitle_text='{subtitle_text}'")
-
-        # Генерация обложки
-        logging.debug("Создаём обложку...")
-        cover_image = make_cover(
-            poster_url,
-            title_text or "Без названия",
-            year_text,
-            duration_text,
-            subtitle_text
-        )
-        if not cover_image:
-            raise ValueError("make_cover вернула None или произошла ошибка при создании обложки.")
+        # Генерация поста и обложки
+        post_text = generate_post_text(course_info)
+        title_text, subtitle_text = extract_title_and_subtitle(post_text)
+        cover_image = generate_cover(poster_url, title_text, year_text, duration_text, subtitle_text)
 
         # Преобразование изображения в байты
         cover_image_bytes = BytesIO()
@@ -150,19 +110,103 @@ def handle_message(message):
         cover_image_bytes.write(cover_image.getvalue())
         cover_image_bytes.seek(0)
 
-        # Преобразование подписи из Markdown в HTML: убираем замену эмодзи, чтобы оставить их оригинал
+        # Преобразование подписи в HTML
         post_text_html = post_text.replace('**', '<b>').replace('__', '<i>')
-        logging.debug("Отправляем картинку пользователю...")
+
+        # Отправка поста с обложкой
         bot.send_photo(
-            message.chat.id,
+            chat_id,
             cover_image_bytes,
             caption=post_text_html,
             parse_mode='HTML'
         )
 
+        # Сохранение состояния
+        user_states[chat_id] = {
+            'data': data,
+            'course_info': course_info,
+            'poster_url': poster_url,
+            'year_text': year_text,
+            'duration_text': duration_text,
+            'post_text': post_text,
+            'cover_image': cover_image_bytes.getvalue()
+        }
+
+        # Добавление кнопок
+        markup = InlineKeyboardMarkup()
+        markup.row_width = 2
+        markup.add(
+            InlineKeyboardButton("Всё окей", callback_data="approve"),
+            InlineKeyboardButton("Поменять заголовок", callback_data="change_title")
+        )
+        bot.send_message(chat_id, "Выберите действие:", reply_markup=markup)
+
     except Exception as e:
-        logging.error(f"Ошибка при обработке сообщения: {e}", exc_info=True)
-        bot.send_message(message.chat.id, f"⛔ Ошибка: {str(e)}")
+        logging.error(f"Ошибка: {e}", exc_info=True)
+        bot.send_message(chat_id, f"⛔ Ошибка: {str(e)}")
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    chat_id = call.message.chat.id
+    if call.data == "approve":
+        bot.answer_callback_query(call.id, "Пост одобрен!")
+        if chat_id in user_states:
+            del user_states[chat_id]
+    elif call.data == "change_title":
+        bot.answer_callback_query(call.id)
+        bot.send_message(chat_id, "Пожалуйста, введите новый заголовок (две строчки):")
+        user_states[chat_id]['state'] = 'waiting_for_title'
+
+def handle_new_title(message):
+    chat_id = message.chat.id
+    new_title = message.text.strip()
+    if chat_id not in user_states:
+        bot.send_message(chat_id, "Произошла ошибка. Начните заново.")
+        return
+
+    title_lines = new_title.split('\n')
+    if len(title_lines) != 2:
+        bot.send_message(chat_id, "Введите заголовок в две строчки.")
+        return
+
+    title_text = title_lines[0].strip()
+    subtitle_text = title_lines[1].strip()
+
+    # Получаем сохраненные данные
+    poster_url = user_states[chat_id]['poster_url']
+    year_text = user_states[chat_id]['year_text']
+    duration_text = user_states[chat_id]['duration_text']
+    post_text = user_states[chat_id]['post_text']
+
+    # Обновляем текст поста
+    lines = post_text.split('\n')
+    if lines:
+        lines[0] = f"<b>{title_text}</b>"
+        if len(lines) > 1:
+            lines[1] = subtitle_text
+        else:
+            lines.append(subtitle_text)
+        updated_post_text = '\n'.join(lines)
+    else:
+        updated_post_text = f"<b>{title_text}</b>\n{subtitle_text}"
+
+    # Генерация новой обложки
+    new_cover_image = generate_cover(poster_url, title_text, year_text, duration_text, subtitle_text)
+    new_cover_image_bytes = BytesIO()
+    new_cover_image.seek(0)
+    new_cover_image_bytes.write(new_cover_image.getvalue())
+    new_cover_image_bytes.seek(0)
+
+    # Отправка обновленного поста
+    bot.send_photo(
+        chat_id,
+        new_cover_image_bytes,
+        caption=updated_post_text,
+        parse_mode='HTML'
+    )
+
+    # Сброс состояния
+    del user_states[chat_id]
 
 if __name__ == "__main__":
     logging.info("Бот запущен!")
